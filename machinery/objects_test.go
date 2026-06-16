@@ -85,7 +85,7 @@ type objOption func(obj *unstructured.Unstructured, r *ownerMode)
 type objBuilder func(*ownerMode) *unstructured.Unstructured
 
 // buildObj returns a builder which creates a Secret unstructured object with the given name/namespace and options applied.
-func buildObj(name, namespace string, opts ...objOption) objBuilder { //nolint:unparam
+func buildObj(name, namespace string, opts ...objOption) objBuilder {
 	return func(mode *ownerMode) *unstructured.Unstructured {
 		obj := &unstructured.Unstructured{
 			Object: map[string]any{

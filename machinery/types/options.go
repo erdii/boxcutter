@@ -133,6 +133,8 @@ type ObjectReconcileOptions struct {
 	OwnerStrategy          OwnerStrategy
 	Paused                 bool
 	Probes                 map[string]Prober
+	ContentionObserver     ContentionObserver
+	DetailedConflicts      bool
 }
 
 // Default sets empty Option fields to their default value.
@@ -158,14 +160,18 @@ var (
 	_ ObjectReconcileOption = (WithSiblingOwnerClassifier)(nil)
 	_ ObjectReconcileOption = (WithProbe("", nil))
 	_ ObjectTeardownOption  = (WithTeardownWriter(nil))
+	_ ObjectReconcileOption = (*contentionObserverOpts)(nil)
+	_ ObjectTeardownOption  = (*contentionObserverOpts)(nil)
+	_ ObjectReconcileOption = (WithDetailedConflicts{})
 )
 
 // ObjectTeardownOptions holds configuration options changing object teardown.
 type ObjectTeardownOptions struct {
-	Orphan         bool
-	TeardownWriter client.Writer
-	Owner          client.Object
-	OwnerStrategy  OwnerStrategy
+	Orphan             bool
+	TeardownWriter     client.Writer
+	Owner              client.Object
+	OwnerStrategy      OwnerStrategy
+	ContentionObserver ContentionObserver
 }
 
 // Default sets empty Option fields to their default value.
@@ -283,6 +289,27 @@ func (p WithPaused) ApplyToPhaseReconcileOptions(opts *PhaseReconcileOptions) {
 // ApplyToRevisionReconcileOptions implements RevisionReconcileOptions.
 func (p WithPaused) ApplyToRevisionReconcileOptions(opts *RevisionReconcileOptions) {
 	opts.DefaultPhaseOptions = append(opts.DefaultPhaseOptions, p)
+}
+
+// WithDetailedConflicts enables recording of per-manager field paths
+// in ReconcileOutcome.FieldConflicts. Increases memory usage under
+// sustained contention but provides visibility into which fields are
+// being fought over.
+type WithDetailedConflicts struct{}
+
+// ApplyToObjectReconcileOptions implements ObjectReconcileOption.
+func (d WithDetailedConflicts) ApplyToObjectReconcileOptions(opts *ObjectReconcileOptions) {
+	opts.DetailedConflicts = true
+}
+
+// ApplyToPhaseReconcileOptions implements PhaseOption.
+func (d WithDetailedConflicts) ApplyToPhaseReconcileOptions(opts *PhaseReconcileOptions) {
+	opts.DefaultObjectOptions = append(opts.DefaultObjectOptions, d)
+}
+
+// ApplyToRevisionReconcileOptions implements RevisionReconcileOptions.
+func (d WithDetailedConflicts) ApplyToRevisionReconcileOptions(opts *RevisionReconcileOptions) {
+	opts.DefaultPhaseOptions = append(opts.DefaultPhaseOptions, d)
 }
 
 // WithProbe registers the given probe to evaluate state of objects.
@@ -483,6 +510,45 @@ type combinedOpts struct {
 
 func (copt *combinedOpts) ApplyToComparatorOptions(opts *ComparatorOptions) {
 	copt.fn(opts)
+}
+
+// WithContentionObserver instruments reconcile and teardown
+// with a ContentionObserver for contention tracking.
+func WithContentionObserver(observer ContentionObserver) interface {
+	ObjectReconcileOption
+	ObjectTeardownOption
+} {
+	return &contentionObserverOpts{
+		observer: observer,
+	}
+}
+
+type contentionObserverOpts struct {
+	observer ContentionObserver
+}
+
+func (o *contentionObserverOpts) ApplyToObjectReconcileOptions(opts *ObjectReconcileOptions) {
+	opts.ContentionObserver = o.observer
+}
+
+func (o *contentionObserverOpts) ApplyToPhaseReconcileOptions(opts *PhaseReconcileOptions) {
+	opts.DefaultObjectOptions = append(opts.DefaultObjectOptions, o)
+}
+
+func (o *contentionObserverOpts) ApplyToRevisionReconcileOptions(opts *RevisionReconcileOptions) {
+	opts.DefaultPhaseOptions = append(opts.DefaultPhaseOptions, o)
+}
+
+func (o *contentionObserverOpts) ApplyToObjectTeardownOptions(opts *ObjectTeardownOptions) {
+	opts.ContentionObserver = o.observer
+}
+
+func (o *contentionObserverOpts) ApplyToPhaseTeardownOptions(opts *PhaseTeardownOptions) {
+	opts.DefaultObjectOptions = append(opts.DefaultObjectOptions, o)
+}
+
+func (o *contentionObserverOpts) ApplyToRevisionTeardownOptions(opts *RevisionTeardownOptions) {
+	opts.DefaultPhaseOptions = append(opts.DefaultPhaseOptions, o)
 }
 
 type ComparatorOptions struct {

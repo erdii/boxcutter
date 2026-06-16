@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/util/csaupgrade"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/structured-merge-diff/v6/fieldpath"
 
 	"pkg.package-operator.run/boxcutter/machinery/types"
 )
@@ -117,6 +118,10 @@ func (e *ObjectEngine) Teardown(
 		panic("owner revision must be set and start at 1")
 	}
 
+	if err := ensureGVKIsSet(desiredObject, e.scheme); err != nil {
+		return false, err
+	}
+
 	// The "orphan" finalizer on the owner object indicates that the Owner
 	// is being deleted and orphaning its dependents. This finalizer is
 	// managed by KCM's gc controller. If we observe it, we are racing with
@@ -192,7 +197,10 @@ func (e *ObjectEngine) Teardown(
 	if err != nil {
 		return false, fmt.Errorf("deleting object: %w", err)
 	}
+
 	// need to wait for Not Found Error to ensure finalizers have been progressed.
+	recordTeardown(options.ContentionObserver, desiredObject, false)
+
 	return false, nil
 }
 
@@ -288,8 +296,10 @@ func (e *ObjectEngine) Reconcile(
 			return nil, fmt.Errorf("migrating to SSA after create: %w", err)
 		}
 
-		return newObjectResultCreated(
-			desiredObject, options), nil
+		result := newObjectResultCreated(desiredObject, options)
+		recordReconcile(options.ContentionObserver, desiredObject, result, CompareResult{}, options.DetailedConflicts)
+
+		return result, nil
 
 	case err != nil:
 		return nil, fmt.Errorf("getting object: %w", err)
@@ -349,12 +359,16 @@ func (e *ObjectEngine) objectUpdateHandling(
 	desiredObject Object,
 	actualObject Object,
 	options types.ObjectReconcileOptions,
-) (ObjectResult, error) {
+) (result ObjectResult, err error) {
 	ctrlSit, compareRes, actualOwner, err := e.checkSituation(
 		desiredObject, actualObject, options)
 	if err != nil {
 		return nil, err
 	}
+
+	defer func() {
+		recordReconcile(options.ContentionObserver, desiredObject, result, compareRes, options.DetailedConflicts)
+	}()
 
 	// Get actual revision to ensure revision linearity
 	actualObjectRevision, err := e.getObjectRevision(actualObject)
@@ -689,6 +703,53 @@ func (e *ObjectEngine) migrateFieldManagersToSSA(
 
 func (e *ObjectEngine) revisionAnnotation() string {
 	return e.systemPrefix + "/revision"
+}
+
+func recordReconcile(
+	observer types.ContentionObserver,
+	obj Object,
+	result ObjectResult,
+	compareRes CompareResult,
+	detailedConflicts bool,
+) {
+	if observer == nil {
+		return
+	}
+
+	outcome := types.ReconcileOutcome{
+		ConflictDetected: compareRes.IsConflict(),
+	}
+
+	if result != nil {
+		outcome.Action = result.Action()
+	}
+
+	for _, cm := range compareRes.ConflictingMangers {
+		outcome.ConflictingManagers = append(outcome.ConflictingManagers, cm.Manager)
+
+		if detailedConflicts {
+			fc := types.FieldConflict{Manager: cm.Manager}
+			cm.Fields.Iterate(func(p fieldpath.Path) {
+				fc.Fields = append(fc.Fields, p.String())
+			})
+
+			outcome.FieldConflicts = append(outcome.FieldConflicts, fc)
+		}
+	}
+
+	observer.RecordReconcile(types.ToObjectRef(obj), outcome)
+}
+
+func recordTeardown(
+	observer types.ContentionObserver,
+	obj Object,
+	gone bool,
+) {
+	if observer == nil {
+		return
+	}
+
+	observer.RecordTeardown(types.ToObjectRef(obj), gone)
 }
 
 func (e *ObjectEngine) removeBoxcutterManagedLabelsAndAnnotations(

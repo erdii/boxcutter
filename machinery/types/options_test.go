@@ -825,6 +825,61 @@ func TestWithOwner(t *testing.T) {
 	})
 }
 
+func TestWithContentionObserver(t *testing.T) {
+	t.Parallel()
+
+	observer := &mockContentionObserver{}
+	opt := WithContentionObserver(observer)
+
+	t.Run("applies to object reconcile options", func(t *testing.T) {
+		t.Parallel()
+
+		opts := &ObjectReconcileOptions{}
+		opt.(ObjectReconcileOption).ApplyToObjectReconcileOptions(opts)
+		assert.Equal(t, ContentionObserver(observer), opts.ContentionObserver)
+	})
+
+	t.Run("applies to phase reconcile options", func(t *testing.T) {
+		t.Parallel()
+
+		opts := &PhaseReconcileOptions{}
+		opt.(PhaseReconcileOption).ApplyToPhaseReconcileOptions(opts)
+		require.Len(t, opts.DefaultObjectOptions, 1)
+	})
+
+	t.Run("applies to revision reconcile options", func(t *testing.T) {
+		t.Parallel()
+
+		opts := &RevisionReconcileOptions{}
+		opt.(RevisionReconcileOption).ApplyToRevisionReconcileOptions(opts)
+		require.Len(t, opts.DefaultPhaseOptions, 1)
+	})
+
+	t.Run("applies to object teardown options", func(t *testing.T) {
+		t.Parallel()
+
+		opts := &ObjectTeardownOptions{}
+		opt.(ObjectTeardownOption).ApplyToObjectTeardownOptions(opts)
+		assert.Equal(t, ContentionObserver(observer), opts.ContentionObserver)
+	})
+
+	t.Run("applies to phase teardown options", func(t *testing.T) {
+		t.Parallel()
+
+		opts := &PhaseTeardownOptions{}
+		opt.(PhaseTeardownOption).ApplyToPhaseTeardownOptions(opts)
+		require.Len(t, opts.DefaultObjectOptions, 1)
+	})
+
+	t.Run("applies to revision teardown options", func(t *testing.T) {
+		t.Parallel()
+
+		opts := &RevisionTeardownOptions{}
+		opt.(RevisionTeardownOption).ApplyToRevisionTeardownOptions(opts)
+		require.Len(t, opts.DefaultPhaseOptions, 1)
+	})
+}
+
 func TestObjectReconcileOptions_Default_Panic(t *testing.T) {
 	t.Parallel()
 
@@ -867,3 +922,8 @@ func (m *mockOwnerStrategy) CopyOwnerReferences(objA, objB metav1.Object) {}
 func (m *mockOwnerStrategy) ReleaseController(obj metav1.Object) {}
 
 func (m *mockOwnerStrategy) RemoveOwner(owner, obj metav1.Object) {}
+
+type mockContentionObserver struct{}
+
+func (m *mockContentionObserver) RecordReconcile(_ ObjectRef, _ ReconcileOutcome) {}
+func (m *mockContentionObserver) RecordTeardown(_ ObjectRef, _ bool)              {}
